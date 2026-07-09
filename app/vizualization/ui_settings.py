@@ -37,9 +37,13 @@ CONTROL_BUTTON_MIN_WIDTH = 130
 GANTT_TOOL_BUTTON_MIN_WIDTH = 42
 COMBO_MIN_WIDTH = 220
 
+# Минимальная высота поля с итоговым расписанием на вкладке запуска.
+BEST_SCHEDULE_MIN_HEIGHT = 90
+
 # Начальное состояние таблицы задач.
 TASK_TABLE_INITIAL_ROWS = 12
 TABLE_ERROR_COLOR = "#ef4444"
+VALIDATION_ERROR_BACKGROUND = "#fee2e2"
 
 # Диапазоны и значения по умолчанию для параметров алгоритма.
 POPULATION_RANGE = (2, 100000)

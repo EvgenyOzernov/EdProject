@@ -1,4 +1,4 @@
-from genetic_scheduler import Task, GAConfig, run_all, run_iter
+from app.algorithm.genetic_scheduler import Task, GAConfig, run_all, run_iter
 
 tasks = [
     Task(id="A", duration=3, deadline=4),

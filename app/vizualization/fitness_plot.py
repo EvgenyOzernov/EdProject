@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
 
-import ui_settings as ui
+import vizualization.ui_settings as ui
 
 os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "edproject-matplotlib"))
 
@@ -34,8 +34,36 @@ class FitnessPlot(QWidget):
         self.axes.grid(True, alpha=ui.PLOT_GRID_ALPHA)
 
     def update_plot(self, snapshots: list[object], selected_index: int) -> None:
-        """Очистка графика и оставление его в состоянии макета."""
-        # Точки будут добавляться здесь после подключения алгоритма.
+        """Рисует best/average/worst fitness до выбранного поколения."""
         self.axes.clear()
         self._style_axes()
+        if not snapshots or selected_index < 0:
+            self.canvas.draw_idle()
+            return
+
+        visible_snapshots = snapshots[: selected_index + 1]
+        generations = [
+            getattr(snapshot, "generation", index)
+            for index, snapshot in enumerate(visible_snapshots)
+        ]
+        best_values = [
+            getattr(getattr(snapshot, "best_in_generation", None), "fitness", None)
+            for snapshot in visible_snapshots
+        ]
+        average_values = [
+            getattr(snapshot, "average_fitness", None)
+            for snapshot in visible_snapshots
+        ]
+        worst_values = [
+            getattr(snapshot, "worst_fitness", None)
+            for snapshot in visible_snapshots
+        ]
+
+        self.axes.plot(generations, best_values, marker="o", linewidth=1.8, label="Лучшее")
+        self.axes.plot(generations, average_values, marker="o", linewidth=1.8, label="Среднее")
+        self.axes.plot(generations, worst_values, marker="o", linewidth=1.8, label="Худшее")
+        self.axes.legend(loc="best")
+
+        self.axes.relim()
+        self.axes.autoscale_view()
         self.canvas.draw_idle()

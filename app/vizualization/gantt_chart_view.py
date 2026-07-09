@@ -2,7 +2,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QWheelEvent
 from PyQt6.QtWidgets import QGraphicsScene, QGraphicsView, QSizePolicy
 
-import ui_settings as ui
+import vizualization.ui_settings as ui
 
 
 class GanttChartView(QGraphicsView):
@@ -22,24 +22,29 @@ class GanttChartView(QGraphicsView):
         self.setMinimumHeight(ui.GANTT_MIN_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    def show_schedule(self, snapshot=None) -> None:
+    def show_schedule(self, snapshot=None, tasks_by_id=None) -> None:
         """Пустое состояние или переданное расписание."""
         self._scene.clear()
 
-        # Виджет остается в пустом состоянии
-        if snapshot is None or not getattr(snapshot, "schedule", None):
+        if snapshot is None or not getattr(snapshot, "task_order", None):
             self._scene.addText("Нет данных для отображения")
             self._scene.setSceneRect(*ui.GANTT_EMPTY_SCENE)
             self.fit_to_width()
             return
 
-        # Заготовка отрисовки реального расписания.
+        schedule = self._build_schedule_rows(snapshot, tasks_by_id or {})
+        if not schedule:
+            self._scene.addText("Нет данных для отображения")
+            self._scene.setSceneRect(*ui.GANTT_EMPTY_SCENE)
+            self.fit_to_width()
+            return
+
         left_margin = ui.GANTT_LEFT_MARGIN
         top_margin = ui.GANTT_TOP_MARGIN
         row_height = ui.GANTT_ROW_HEIGHT
         bar_height = ui.GANTT_BAR_HEIGHT
-        finish_max = max(item.finish for item in snapshot.schedule)
-        deadline_max = max(item.task.deadline for item in snapshot.schedule)
+        finish_max = max(item["finish"] for item in schedule)
+        deadline_max = max(item["deadline"] for item in schedule)
         horizon = max(ui.GANTT_HORIZON_MIN, finish_max, deadline_max)
         width = max(ui.GANTT_MIN_WIDTH, horizon * ui.GANTT_TIME_SCALE)
         scale = width / horizon
@@ -63,14 +68,14 @@ class GanttChartView(QGraphicsView):
             tick.setDefaultTextColor(text_color)
             tick.setPos(x + ui.GANTT_TICK_TEXT_X_OFFSET, top_margin + ui.GANTT_TICK_TEXT_Y_OFFSET)
 
-        for row, item in enumerate(snapshot.schedule):
+        for row, item in enumerate(schedule):
             y = top_margin + row * row_height
-            start_x = left_margin + item.start * scale
-            width_x = max(ui.GANTT_MIN_BAR_WIDTH, item.task.duration * scale)
-            deadline_x = left_margin + item.task.deadline * scale
-            color = QColor(ui.COLOR_GANTT_LATE) if item.tardiness else QColor(ui.COLOR_GANTT_DONE)
+            start_x = left_margin + item["start"] * scale
+            width_x = max(ui.GANTT_MIN_BAR_WIDTH, item["duration"] * scale)
+            deadline_x = left_margin + item["deadline"] * scale
+            color = QColor(ui.COLOR_GANTT_LATE) if item["tardiness"] else QColor(ui.COLOR_GANTT_DONE)
 
-            label = self._scene.addText(f"Задача {item.task.number}")
+            label = self._scene.addText(f"Задача {item['task_id']}")
             label.setDefaultTextColor(text_color)
             label.setPos(ui.GANTT_TASK_LABEL_X, y + ui.GANTT_TASK_LABEL_Y_OFFSET)
 
@@ -82,7 +87,7 @@ class GanttChartView(QGraphicsView):
                 QPen(color.darker(ui.GANTT_BAR_BORDER_DARKEN)),
                 QBrush(color),
             )
-            inner = self._scene.addText(f"{item.task.number}: {item.start}-{item.finish}")
+            inner = self._scene.addText(f"{item['task_id']}: {item['start']}-{item['finish']}")
             inner.setDefaultTextColor(QColor(ui.COLOR_GANTT_INNER_TEXT))
             inner.setPos(start_x + ui.GANTT_BAR_TEXT_X_OFFSET, y + ui.GANTT_BAR_TEXT_Y_OFFSET)
 
@@ -93,7 +98,7 @@ class GanttChartView(QGraphicsView):
                 y + bar_height + ui.GANTT_DEADLINE_LINE_OFFSET,
                 QPen(QColor(ui.COLOR_GANTT_DEADLINE_LINE), ui.GANTT_DEADLINE_LINE_WIDTH),
             )
-            deadline_text = self._scene.addText(f"d={item.task.deadline}")
+            deadline_text = self._scene.addText(f"d={item['deadline']}")
             deadline_text.setDefaultTextColor(QColor(ui.COLOR_GANTT_DEADLINE_TEXT))
             deadline_text.setPos(
                 deadline_x + ui.GANTT_DEADLINE_TEXT_X_OFFSET,
@@ -104,9 +109,35 @@ class GanttChartView(QGraphicsView):
             0,
             0,
             left_margin + width + ui.GANTT_EXTRA_RIGHT_SPACE,
-            top_margin + len(snapshot.schedule) * row_height + ui.GANTT_SCENE_BOTTOM_PADDING,
+            top_margin + len(schedule) * row_height + ui.GANTT_SCENE_BOTTOM_PADDING,
         )
         self.fit_to_width()
+
+    def _build_schedule_rows(self, snapshot, tasks_by_id) -> list[dict[str, object]]:
+        """Преобразует SolutionSnapshot алгоритма в строки диаграммы."""
+        rows = []
+        previous_finish = 0
+        for task_id, finish, tardiness in zip(
+            snapshot.task_order,
+            snapshot.completion_times,
+            snapshot.tardiness_values,
+        ):
+            task = tasks_by_id.get(task_id)
+            start = previous_finish
+            duration = getattr(task, "duration", finish - start)
+            deadline = getattr(task, "deadline", finish - tardiness)
+            rows.append(
+                {
+                    "task_id": task_id,
+                    "start": start,
+                    "finish": finish,
+                    "duration": duration,
+                    "deadline": deadline,
+                    "tardiness": tardiness,
+                }
+            )
+            previous_finish = finish
+        return rows
 
     def zoom_in(self) -> None:
         """Увеличение масштаба диаграммы."""

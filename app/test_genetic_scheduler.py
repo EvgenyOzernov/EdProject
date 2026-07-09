@@ -1,4 +1,4 @@
-from genetic_scheduler import GAConfig, Task, evaluate_schedule, run_all, run_iter
+from algorithm.genetic_scheduler import GAConfig, Task, evaluate_schedule, run_all, run_iter
 
 
 def build_tasks():

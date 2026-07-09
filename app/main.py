@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QFileDialog,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QRadioButton,
     QSpinBox,
@@ -33,15 +34,18 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-import ui_settings as ui
-from fitness_plot import FitnessPlot
-from gantt_chart_view import GanttChartView
+import vizualization.ui_settings as ui
+from vizualization.fitness_plot import FitnessPlot
+from vizualization.gantt_chart_view import GanttChartView
 
-ALGORITHM_DIR = Path(__file__).resolve().parents[1] / "genetic_algoritm"
-if str(ALGORITHM_DIR) not in sys.path:
-    sys.path.insert(0, str(ALGORITHM_DIR))
-
-from genetic_scheduler import GAConfig, RunResult, SolutionSnapshot, Task, run_all
+from algorithm.genetic_scheduler import (
+    GAConfig,
+    GenerationState,
+    RunResult,
+    SolutionSnapshot,
+    Task,
+    run_all,
+)
 
 class MainWindow(QMainWindow):
     """Главное окно GUI"""
@@ -53,9 +57,16 @@ class MainWindow(QMainWindow):
         self.resize(ui.WINDOW_WIDTH, ui.WINDOW_HEIGHT)
         self.setMinimumSize(ui.WINDOW_MIN_WIDTH, ui.WINDOW_MIN_HEIGHT)
 
+        self._run_result: RunResult | None = None
+        self._run_history: tuple[GenerationState, ...] = ()
+        self._current_generation_index = -1
+        self._current_tasks_by_id: dict[str | int, Task] = {}
+        self._validating = False
+
         self._build_ui()
         self._connect_signals()
         self._setup_empty_task_rows()
+        self._sync_step_buttons()
         self._apply_styles()
 
     def _build_ui(self) -> None:
@@ -270,6 +281,10 @@ class MainWindow(QMainWindow):
         self.seed_spin = QSpinBox()
         self.seed_spin.setRange(*ui.SEED_RANGE)
         self.seed_spin.setValue(ui.SEED_DEFAULT)
+        self.parameters_validation_label = QLabel("")
+        self.parameters_validation_label.setStyleSheet(
+            f"color: {ui.TABLE_ERROR_COLOR}; font-weight: 600;"
+        )
 
         left.addRow("Размер популяции", self.population_spin)
         left.addRow("Количество поколений", self.generations_spin)
@@ -286,6 +301,7 @@ class MainWindow(QMainWindow):
 
         outer.addLayout(left, stretch=ui.ALGORITHM_LEFT_STRETCH)
         outer.addLayout(right, stretch=ui.ALGORITHM_RIGHT_STRETCH)
+        right.addRow("", self.parameters_validation_label)
         return group
 
     def _build_tasks_area(self) -> QGroupBox:
@@ -329,7 +345,10 @@ class MainWindow(QMainWindow):
         self.average_fitness_edit = self._readonly_line()
         self.worst_fitness_edit = self._readonly_line()
         self.total_tardiness_edit = self._readonly_line()
-        self.best_schedule_edit = self._readonly_line()
+        self.best_schedule_edit = QPlainTextEdit()
+        self.best_schedule_edit.setReadOnly(True)
+        self.best_schedule_edit.setMinimumHeight(ui.BEST_SCHEDULE_MIN_HEIGHT)
+        self.best_schedule_edit.setPlaceholderText("Итоговое расписание появится после запуска")
         info_layout.addRow("Текущее поколение", self.current_generation_edit)
         info_layout.addRow("Лучшее значение Fitness", self.best_fitness_edit)
         info_layout.addRow("Среднее Fitness", self.average_fitness_edit)
@@ -353,7 +372,6 @@ class MainWindow(QMainWindow):
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.start_button = QPushButton("Старт")
-        self.pause_button = QPushButton("Пауза")
         self.next_button = QPushButton("Следующий шаг")
         self.previous_button = QPushButton("Предыдущий шаг")
         self.finish_button = QPushButton("До конца")
@@ -361,7 +379,6 @@ class MainWindow(QMainWindow):
 
         for button in (
             self.start_button,
-            self.pause_button,
             self.next_button,
             self.previous_button,
             self.finish_button,
@@ -387,20 +404,36 @@ class MainWindow(QMainWindow):
         self.reload_file_button.clicked.connect(self._reload_selected_tasks_file)
         self.generate_button.clicked.connect(self._generate_random_tasks)
         self.elitism_check.toggled.connect(self._sync_elitism_controls)
+        self.elitism_check.toggled.connect(self._validate_all_inputs)
+        for spin in (
+            self.population_spin,
+            self.generations_spin,
+            self.crossover_probability_spin,
+            self.mutation_probability_spin,
+            self.elite_count_spin,
+            self.tournament_size_spin,
+            self.stagnation_limit_spin,
+            self.min_duration_spin,
+            self.max_duration_spin,
+            self.min_deadline_spin,
+            self.max_deadline_spin,
+        ):
+            spin.valueChanged.connect(self._validate_all_inputs)
+        self.tasks_table.itemChanged.connect(self._validate_all_inputs)
         self.add_task_button.clicked.connect(self._add_task_row)
         self.delete_task_button.clicked.connect(self._delete_selected_task_rows)
         self.clear_tasks_button.clicked.connect(self._clear_tasks_table)
-        self.individuals_list.currentRowChanged.connect(self.noop)
-        self.gantt_zoom_out_button.clicked.connect(self.noop)
-        self.gantt_fit_button.clicked.connect(self.noop)
-        self.gantt_zoom_in_button.clicked.connect(self.noop)
+        self.individuals_list.currentRowChanged.connect(self._show_selected_individual)
+        self.gantt_zoom_out_button.clicked.connect(self.gantt_view.zoom_out)
+        self.gantt_fit_button.clicked.connect(self.gantt_view.fit_to_width)
+        self.gantt_zoom_in_button.clicked.connect(self.gantt_view.zoom_in)
         self.start_button.clicked.connect(self._run_algorithm)
-        self.pause_button.clicked.connect(self.noop)
-        self.next_button.clicked.connect(self.noop)
-        self.previous_button.clicked.connect(self.noop)
-        self.finish_button.clicked.connect(self.noop)
+        self.next_button.clicked.connect(self._show_next_generation)
+        self.previous_button.clicked.connect(self._show_previous_generation)
+        self.finish_button.clicked.connect(self._show_final_generation)
         self.reset_button.clicked.connect(self._reset_run_output)
         self._sync_elitism_controls()
+        self._validate_all_inputs()
 
     def _apply_styles(self) -> None:
         """Применяет общий стиль виджетов приложения."""
@@ -423,7 +456,7 @@ class MainWindow(QMainWindow):
                 left: {ui.GROUP_TITLE_LEFT_PADDING}px;
                 padding: {ui.GROUP_TITLE_PADDING};
             }}
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTableWidget, QListWidget {{
+            QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTableWidget, QListWidget {{
                 background: {ui.COLOR_GROUP_BACKGROUND};
                 border: 1px solid {ui.COLOR_INPUT_BORDER};
                 border-radius: {ui.INPUT_BORDER_RADIUS}px;
@@ -469,6 +502,96 @@ class MainWindow(QMainWindow):
         self.elite_count_spin.setEnabled(enabled)
         if enabled and self.elite_count_spin.value() == 0:
             self.elite_count_spin.setValue(1)
+        self._validate_all_inputs()
+
+    def _validate_all_inputs(self, *args) -> bool:
+        """Проверяет таблицу и параметры сразу после изменения значений."""
+        if self._validating:
+            return False
+
+        self._validating = True
+        table_is_valid = self._validate_task_table()
+        parameters_are_valid = self._validate_algorithm_parameters()
+        self.start_button.setEnabled(table_is_valid and parameters_are_valid)
+        self._validating = False
+        return table_is_valid and parameters_are_valid
+
+    def _validate_task_table(self) -> bool:
+        """Подсвечивает некорректные ячейки таблицы задач."""
+        invalid_cells: list[tuple[int, int, str]] = []
+        self._clear_table_error_marks()
+
+        for row in range(self.tasks_table.rowCount()):
+            duration_text = self._cell_text(row, 1)
+            deadline_text = self._cell_text(row, 2)
+            if not duration_text and not deadline_text:
+                continue
+
+            if self._parse_positive_int(duration_text) is None:
+                invalid_cells.append((row, 1, "Введите положительное целое число."))
+            if self._parse_non_negative_int(deadline_text) is None:
+                invalid_cells.append((row, 2, "Введите неотрицательное целое число."))
+
+        self._mark_invalid_cells(invalid_cells)
+        if invalid_cells:
+            self.table_validation_label.setText(
+                "В таблице есть некорректные значения: проверьте подсвеченные ячейки."
+            )
+            return False
+
+        self.table_validation_label.setText("")
+        return True
+
+    def _validate_algorithm_parameters(self) -> bool:
+        """Подсвечивает конфликтующие параметры алгоритма и генерации."""
+        self._clear_parameter_error_marks()
+        errors: list[str] = []
+
+        if self.elitism_check.isChecked() and self.elite_count_spin.value() >= self.population_spin.value():
+            errors.append("Количество лучших особей должно быть меньше размера популяции.")
+            self._mark_invalid_widgets(self.elite_count_spin, self.population_spin)
+
+        if self.tournament_size_spin.value() > self.population_spin.value():
+            errors.append("Размер турнира не должен превышать размер популяции.")
+            self._mark_invalid_widgets(self.tournament_size_spin, self.population_spin)
+
+        if self.min_duration_spin.value() > self.max_duration_spin.value():
+            errors.append("Минимальное время выполнения не должно быть больше максимального.")
+            self._mark_invalid_widgets(self.min_duration_spin, self.max_duration_spin)
+
+        if self.min_deadline_spin.value() > self.max_deadline_spin.value():
+            errors.append("Минимальный дедлайн не должен быть больше максимального.")
+            self._mark_invalid_widgets(self.min_deadline_spin, self.max_deadline_spin)
+
+        self.parameters_validation_label.setText("\n".join(errors))
+        return not errors
+
+    def _clear_parameter_error_marks(self) -> None:
+        """Снимает подсветку ошибок с параметров алгоритма."""
+        for widget in self._parameter_widgets_for_validation():
+            widget.setStyleSheet("")
+            widget.setToolTip("")
+
+    def _mark_invalid_widgets(self, *widgets) -> None:
+        """Подсвечивает виджеты с конфликтующими значениями."""
+        for widget in widgets:
+            widget.setStyleSheet(
+                f"border: 1px solid {ui.TABLE_ERROR_COLOR}; "
+                f"background: {ui.VALIDATION_ERROR_BACKGROUND};"
+            )
+            widget.setToolTip("Значение конфликтует с другими параметрами.")
+
+    def _parameter_widgets_for_validation(self) -> tuple[QWidget, ...]:
+        """Возвращает параметры, которые участвуют в перекрестной проверке."""
+        return (
+            self.population_spin,
+            self.elite_count_spin,
+            self.tournament_size_spin,
+            self.min_duration_spin,
+            self.max_duration_spin,
+            self.min_deadline_spin,
+            self.max_deadline_spin,
+        )
 
     def _setup_empty_task_rows(self) -> None:
         """Заполняет таблицу пустыми строками для ручного ввода."""
@@ -650,7 +773,11 @@ class MainWindow(QMainWindow):
         self.total_tasks_label.setText(f"Всего задач: {self.tasks_table.rowCount()}")
 
     def _run_algorithm(self) -> None:
-        """Запускает полный расчет алгоритма и показывает текстовый результат."""
+        """Запускает алгоритм и подготавливает историю для пошагового просмотра."""
+        if not self._validate_all_inputs():
+            self._show_validation_error("Исправьте подсвеченные значения перед запуском алгоритма.")
+            return
+
         try:
             tasks = self._collect_tasks()
             config = self._build_config()
@@ -662,12 +789,19 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка запуска", f"Алгоритм завершился с ошибкой:\n{error}")
             return
 
-        self._show_run_result(result)
+        self._run_result = result
+        self._run_history = result.history
+        self._current_tasks_by_id = {task.id: task for task in tasks}
+        self.table_validation_label.setText(
+            f"Расчет завершен: {self._stop_reason_text(result.stop_reason)}"
+        )
+        self.tabs.setCurrentIndex(2)
+        self._show_generation(0)
 
     def _collect_tasks(self) -> list[Task]:
         """Читает валидные задачи из таблицы для передачи в алгоритм."""
         tasks: list[Task] = []
-        invalid_cells: list[tuple[int, int]] = []
+        invalid_cells: list[tuple[int, int, str]] = []
         self._clear_table_error_marks()
 
         for row in range(self.tasks_table.rowCount()):
@@ -679,9 +813,9 @@ class MainWindow(QMainWindow):
             duration = self._parse_positive_int(duration_text)
             deadline = self._parse_non_negative_int(deadline_text)
             if duration is None:
-                invalid_cells.append((row, 1))
+                invalid_cells.append((row, 1, "Введите положительное целое число."))
             if deadline is None:
-                invalid_cells.append((row, 2))
+                invalid_cells.append((row, 2, "Введите неотрицательное целое число."))
             if duration is not None and deadline is not None:
                 tasks.append(Task(id=row + 1, duration=duration, deadline=deadline))
 
@@ -715,35 +849,81 @@ class MainWindow(QMainWindow):
             history_enabled=True,
         )
 
-    def _show_run_result(self, result: RunResult) -> None:
-        """Выводит итог алгоритма без графика и диаграммы."""
-        final_state = result.history[-1] if result.history else None
-        best = result.best_solution
+    def _show_generation(self, index: int) -> None:
+        """Показывает выбранное поколение и связанные визуализации."""
+        if not self._run_history:
+            return
 
-        self.current_generation_edit.setText(str(final_state.generation if final_state else ""))
+        self._current_generation_index = max(0, min(index, len(self._run_history) - 1))
+        state = self._run_history[self._current_generation_index]
+        best = state.best_so_far
+
+        self.current_generation_edit.setText(str(state.generation))
         self.best_fitness_edit.setText(str(best.fitness))
-        self.average_fitness_edit.setText(
-            f"{final_state.average_fitness:.2f}" if final_state else ""
-        )
-        self.worst_fitness_edit.setText(str(final_state.worst_fitness if final_state else ""))
+        self.average_fitness_edit.setText(f"{state.average_fitness:.2f}")
+        self.worst_fitness_edit.setText(str(state.worst_fitness))
         self.total_tardiness_edit.setText(str(best.total_tardiness))
-        self.best_schedule_edit.setText(self._format_task_order(best))
-        self.table_validation_label.setText(
-            f"Расчет завершен: {self._stop_reason_text(result.stop_reason)}"
-        )
-        self._fill_individuals_list(final_state.population if final_state else ())
-        self.tabs.setCurrentIndex(2)
+        self.best_schedule_edit.setPlainText(self._format_task_order(best))
+        self._fill_individuals_list(state.population)
+        self.fitness_plot.update_plot(list(self._run_history), self._current_generation_index)
+        self._sync_step_buttons()
+
+    def _show_previous_generation(self) -> None:
+        """Переходит к предыдущему поколению."""
+        if self._run_history:
+            self._show_generation(self._current_generation_index - 1)
+
+    def _show_next_generation(self) -> None:
+        """Переходит к следующему поколению."""
+        if self._run_history:
+            self._show_generation(self._current_generation_index + 1)
+
+    def _show_final_generation(self) -> None:
+        """Показывает последнее доступное поколение."""
+        if self._run_history:
+            self._show_generation(len(self._run_history) - 1)
+
+    def _show_selected_individual(self, row: int) -> None:
+        """Обновляет диаграмму Ганта для выбранной особи."""
+        if not self._run_history or row < 0:
+            self.gantt_view.show_schedule()
+            return
+
+        state = self._run_history[self._current_generation_index]
+        if row >= len(state.population):
+            self.gantt_view.show_schedule()
+            return
+
+        self.gantt_view.show_schedule(state.population[row], self._current_tasks_by_id)
 
     def _fill_individuals_list(self, population: tuple[SolutionSnapshot, ...]) -> None:
         """Показывает особей последнего поколения текстовым списком."""
+        self.individuals_list.blockSignals(True)
         self.individuals_list.clear()
         for index, snapshot in enumerate(population, start=1):
-            self.individuals_list.addItem(
-                f"Особь {index}: fitness={snapshot.fitness}, порядок={self._format_task_order(snapshot)}"
-            )
+            self.individuals_list.addItem(f"Особь {index}: fitness={snapshot.fitness}")
+        self.individuals_list.blockSignals(False)
+        if population:
+            self.individuals_list.setCurrentRow(0)
+            self._show_selected_individual(0)
+        else:
+            self.gantt_view.show_schedule()
+
+    def _sync_step_buttons(self) -> None:
+        """Обновляет доступность кнопок пошаговой навигации."""
+        has_history = bool(self._run_history)
+        is_first = self._current_generation_index <= 0
+        is_last = self._current_generation_index >= len(self._run_history) - 1
+        self.previous_button.setEnabled(has_history and not is_first)
+        self.next_button.setEnabled(has_history and not is_last)
+        self.finish_button.setEnabled(has_history and not is_last)
 
     def _reset_run_output(self) -> None:
         """Очищает поля результата запуска."""
+        self._run_result = None
+        self._run_history = ()
+        self._current_generation_index = -1
+        self._current_tasks_by_id = {}
         self.current_generation_edit.clear()
         self.best_fitness_edit.clear()
         self.average_fitness_edit.clear()
@@ -751,6 +931,9 @@ class MainWindow(QMainWindow):
         self.total_tardiness_edit.clear()
         self.best_schedule_edit.clear()
         self.individuals_list.clear()
+        self.gantt_view.show_schedule()
+        self.fitness_plot.update_plot([], -1)
+        self._sync_step_buttons()
         self.table_validation_label.setText("")
 
     def _show_validation_error(self, message: str) -> None:
@@ -765,13 +948,15 @@ class MainWindow(QMainWindow):
                 item = self.tasks_table.item(row, column)
                 if item is not None:
                     item.setBackground(QColor(ui.COLOR_GROUP_BACKGROUND))
+                    item.setToolTip("")
 
-    def _mark_invalid_cells(self, cells: list[tuple[int, int]]) -> None:
+    def _mark_invalid_cells(self, cells: list[tuple[int, int, str]]) -> None:
         """Подсвечивает ячейки с некорректными значениями."""
-        for row, column in cells:
+        for row, column, message in cells:
             item = self.tasks_table.item(row, column)
             if item is not None:
-                item.setBackground(QColor(ui.TABLE_ERROR_COLOR))
+                item.setBackground(QColor(ui.VALIDATION_ERROR_BACKGROUND))
+                item.setToolTip(message)
 
     def _cell_text(self, row: int, column: int) -> str:
         """Возвращает очищенный текст из ячейки таблицы."""
@@ -809,10 +994,6 @@ class MainWindow(QMainWindow):
             "stagnation_limit_reached": "достигнут лимит стагнации",
         }
         return reasons.get(reason, reason)
-
-    def noop(self, *args, **kwargs) -> None:
-        """Пустой обработчик для кнопок макета"""
-        return None
 
 
 def main() -> int:
