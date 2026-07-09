@@ -89,14 +89,14 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(*ui.TAB_MARGINS)
         layout.setSpacing(ui.TAB_SPACING)
 
-        # Верхняя область: история поколений и диаграмма расписания.
+        # Верхняя область: список особей текущего поколения и диаграмма расписания.
         upper_splitter = QSplitter(Qt.Orientation.Horizontal)
-        history_group = QGroupBox("История поколений")
-        history_layout = QVBoxLayout(history_group)
-        self.generations_list = QListWidget()
-        history_layout.addWidget(self.generations_list)
+        individuals_group = QGroupBox("Особи текущего поколения")
+        individuals_layout = QVBoxLayout(individuals_group)
+        self.individuals_list = QListWidget()
+        individuals_layout.addWidget(self.individuals_list)
 
-        chart_group = QGroupBox("Текущее расписание")
+        chart_group = QGroupBox("Расписание выбранной особи")
         chart_layout = QVBoxLayout(chart_group)
         chart_toolbar = QHBoxLayout()
         chart_toolbar.addStretch(1)
@@ -110,9 +110,9 @@ class MainWindow(QMainWindow):
         self.gantt_view = GanttChartView()
         chart_layout.addWidget(self.gantt_view)
 
-        upper_splitter.addWidget(history_group)
+        upper_splitter.addWidget(individuals_group)
         upper_splitter.addWidget(chart_group)
-        upper_splitter.setStretchFactor(0, ui.RUN_UPPER_HISTORY_STRETCH)
+        upper_splitter.setStretchFactor(0, ui.RUN_UPPER_INDIVIDUALS_STRETCH)
         upper_splitter.setStretchFactor(1, ui.RUN_UPPER_CHART_STRETCH)
         upper_splitter.setSizes(ui.RUN_UPPER_INITIAL_SIZES)
 
@@ -377,7 +377,7 @@ class MainWindow(QMainWindow):
         self.add_task_button.clicked.connect(self.noop)
         self.delete_task_button.clicked.connect(self.noop)
         self.clear_tasks_button.clicked.connect(self.noop)
-        self.generations_list.currentRowChanged.connect(self.noop)
+        self.individuals_list.currentRowChanged.connect(self.noop)
         self.gantt_zoom_out_button.clicked.connect(self.noop)
         self.gantt_fit_button.clicked.connect(self.noop)
         self.gantt_zoom_in_button.clicked.connect(self.noop)
