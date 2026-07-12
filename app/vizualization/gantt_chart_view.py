@@ -19,6 +19,8 @@ class GanttChartView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setMinimumHeight(ui.GANTT_MIN_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -46,8 +48,7 @@ class GanttChartView(QGraphicsView):
         finish_max = max(item["finish"] for item in schedule)
         deadline_max = max(item["deadline"] for item in schedule)
         horizon = max(ui.GANTT_HORIZON_MIN, finish_max, deadline_max)
-        width = max(ui.GANTT_MIN_WIDTH, horizon * ui.GANTT_TIME_SCALE)
-        scale = width / horizon
+        width, scale = self._calculate_timeline_geometry(horizon)
 
         axis_pen = QPen(QColor(ui.COLOR_GANTT_AXIS), ui.GANTT_AXIS_WIDTH)
         text_color = QColor(ui.COLOR_GANTT_TEXT)
@@ -113,8 +114,28 @@ class GanttChartView(QGraphicsView):
         )
         self.fit_to_width()
 
+    def _calculate_timeline_geometry(self, horizon: int) -> tuple[float, float]:
+        """Подбирает подходящие ширину и масштаб времени"""
+        viewport_width = max(
+            ui.GANTT_MIN_WIDTH,
+            self.viewport().width() - ui.GANTT_VIEWPORT_PADDING,
+        )
+        target_width = min(
+            ui.GANTT_MAX_AUTO_WIDTH,
+            max(ui.GANTT_MIN_WIDTH, viewport_width * ui.GANTT_TARGET_VIEWPORT_WIDTH_FACTOR),
+        )
+        scale = min(
+            ui.GANTT_TIME_SCALE,
+            max(ui.GANTT_MIN_TIME_SCALE, target_width / max(1, horizon)),
+        )
+        width = min(
+            ui.GANTT_MAX_AUTO_WIDTH,
+            max(ui.GANTT_MIN_WIDTH, horizon * scale),
+        )
+        return width, width / max(1, horizon)
+
     def _build_schedule_rows(self, snapshot, tasks_by_id) -> list[dict[str, object]]:
-        """Преобразует SolutionSnapshot алгоритма в строки диаграммы."""
+        """Преобразует SolutionSnapshot алгоритма в строки диаграммы"""
         rows = []
         previous_finish = 0
         for task_id, finish, tardiness in zip(
@@ -148,14 +169,24 @@ class GanttChartView(QGraphicsView):
         self._apply_zoom(1 / ui.GANTT_ZOOM_STEP)
 
     def fit_to_width(self) -> None:
-        """Адаптирование масштаба диаграммы под ширину видимой области."""
+        """Вписывает диаграмму по ширине без потери читаемости строк"""
         scene_rect = self._scene.sceneRect()
         if scene_rect.isEmpty():
             return
+
+        viewport_width = max(1, self.viewport().width() - ui.GANTT_VIEWPORT_PADDING)
+        scale_by_width = viewport_width / max(1.0, scene_rect.width())
+        scale_factor = min(
+            ui.GANTT_FIT_MAX_SCALE,
+            max(ui.GANTT_FIT_MIN_SCALE, scale_by_width),
+        )
+
         self._fit_to_width = True
-        self._zoom_factor = ui.GANTT_DEFAULT_ZOOM
+        self._zoom_factor = scale_factor
         self.resetTransform()
-        self.fitInView(scene_rect, Qt.AspectRatioMode.KeepAspectRatio)
+        self.scale(scale_factor, scale_factor)
+        self.horizontalScrollBar().setValue(self.horizontalScrollBar().minimum())
+        self.verticalScrollBar().setValue(self.verticalScrollBar().minimum())
 
     def _apply_zoom(self, factor: float) -> None:
         """Применяет ограниченный коэффициент масштабирования."""

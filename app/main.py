@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QMainWindow,
     QFileDialog,
+    QDialog,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -62,6 +63,7 @@ class MainWindow(QMainWindow):
         self._current_generation_index = -1
         self._current_tasks_by_id: dict[str | int, Task] = {}
         self._validating = False
+        self._gantt_dialog: QDialog | None = None
 
         self._build_ui()
         self._connect_signals()
@@ -124,7 +126,13 @@ class MainWindow(QMainWindow):
         self.gantt_zoom_out_button = QPushButton("-")
         self.gantt_fit_button = QPushButton("По ширине")
         self.gantt_zoom_in_button = QPushButton("+")
-        for button in (self.gantt_zoom_out_button, self.gantt_fit_button, self.gantt_zoom_in_button):
+        self.gantt_open_button = QPushButton("Открыть отдельно")
+        for button in (
+            self.gantt_zoom_out_button,
+            self.gantt_fit_button,
+            self.gantt_zoom_in_button,
+            self.gantt_open_button,
+        ):
             button.setMinimumWidth(ui.GANTT_TOOL_BUTTON_MIN_WIDTH)
             chart_toolbar.addWidget(button)
         chart_layout.addLayout(chart_toolbar)
@@ -427,6 +435,7 @@ class MainWindow(QMainWindow):
         self.gantt_zoom_out_button.clicked.connect(self.gantt_view.zoom_out)
         self.gantt_fit_button.clicked.connect(self.gantt_view.fit_to_width)
         self.gantt_zoom_in_button.clicked.connect(self.gantt_view.zoom_in)
+        self.gantt_open_button.clicked.connect(self._open_gantt_dialog)
         self.start_button.clicked.connect(self._run_algorithm)
         self.next_button.clicked.connect(self._show_next_generation)
         self.previous_button.clicked.connect(self._show_previous_generation)
@@ -885,16 +894,59 @@ class MainWindow(QMainWindow):
 
     def _show_selected_individual(self, row: int) -> None:
         """Обновляет диаграмму Ганта для выбранной особи."""
-        if not self._run_history or row < 0:
+        snapshot = self._selected_individual_snapshot(row)
+        if snapshot is None:
             self.gantt_view.show_schedule()
             return
+
+        self.gantt_view.show_schedule(snapshot, self._current_tasks_by_id)
+
+    def _selected_individual_snapshot(self, row: int | None = None) -> SolutionSnapshot | None:
+        """Возвращает выбранную особь текущего поколения."""
+        if not self._run_history:
+            return None
+
+        selected_row = self.individuals_list.currentRow() if row is None else row
+        if selected_row < 0:
+            return None
 
         state = self._run_history[self._current_generation_index]
-        if row >= len(state.population):
-            self.gantt_view.show_schedule()
+        if selected_row >= len(state.population):
+            return None
+        return state.population[selected_row]
+
+    def _open_gantt_dialog(self) -> None:
+        """Открывает диаграмму Ганта выбранной особи в отдельном большом окне."""
+        snapshot = self._selected_individual_snapshot()
+        if snapshot is None:
+            QMessageBox.information(self, "Диаграмма Ганта", "Сначала выберите особь для просмотра.")
             return
 
-        self.gantt_view.show_schedule(state.population[row], self._current_tasks_by_id)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Диаграмма Ганта выбранной особи")
+        dialog.resize(ui.GANTT_DIALOG_WIDTH, ui.GANTT_DIALOG_HEIGHT)
+        dialog.setMinimumSize(ui.GANTT_DIALOG_MIN_WIDTH, ui.GANTT_DIALOG_MIN_HEIGHT)
+
+        layout = QVBoxLayout(dialog)
+        toolbar = QHBoxLayout()
+        toolbar.addStretch(1)
+        zoom_out_button = QPushButton("-")
+        fit_button = QPushButton("По ширине")
+        zoom_in_button = QPushButton("+")
+        for button in (zoom_out_button, fit_button, zoom_in_button):
+            button.setMinimumWidth(ui.GANTT_TOOL_BUTTON_MIN_WIDTH)
+            toolbar.addWidget(button)
+
+        gantt_view = GanttChartView()
+        gantt_view.show_schedule(snapshot, self._current_tasks_by_id)
+        zoom_out_button.clicked.connect(gantt_view.zoom_out)
+        fit_button.clicked.connect(gantt_view.fit_to_width)
+        zoom_in_button.clicked.connect(gantt_view.zoom_in)
+
+        layout.addLayout(toolbar)
+        layout.addWidget(gantt_view)
+        self._gantt_dialog = dialog
+        dialog.show()
 
     def _fill_individuals_list(self, population: tuple[SolutionSnapshot, ...]) -> None:
         """Показывает особей последнего поколения текстовым списком."""
